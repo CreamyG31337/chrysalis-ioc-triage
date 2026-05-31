@@ -187,8 +187,22 @@ if ($script:Findings.Count -eq 0) {
     Write-Host "Consider running with -ScanPaths to hash more directories (e.g. -ScanPaths 'C:\Users','C:\ProgramData')." -ForegroundColor Gray
 }
 
-$reportPath = Join-Path (Split-Path $IocFile) "chrysalis-scan-$(Get-Date -Format 'yyyyMMdd-HHmmss').json"
-$script:Findings | ConvertTo-Json -Depth 5 | Set-Content -Path $reportPath -Encoding UTF8
-Write-Host "Report saved: $reportPath" -ForegroundColor Gray
+# Write report next to the IoC file; fall back to the current directory if
+# $IocFile has no directory component (e.g. a bare filename was passed).
+$reportDir = Split-Path -Parent $IocFile
+if ([string]::IsNullOrWhiteSpace($reportDir)) { $reportDir = (Get-Location).Path }
+$reportPath = Join-Path $reportDir "chrysalis-scan-$(Get-Date -Format 'yyyyMMdd-HHmmss').json"
+
+# Build the JSON explicitly. Piping an empty collection into ConvertTo-Json
+# yields $null, and `$null | Set-Content` writes nothing, so a clean scan
+# would silently produce no file. Force an array and a '[]' fallback.
+$reportJson = ConvertTo-Json -InputObject @($script:Findings.ToArray()) -Depth 5
+if ([string]::IsNullOrWhiteSpace($reportJson)) { $reportJson = '[]' }
+try {
+    Set-Content -Path $reportPath -Value $reportJson -Encoding UTF8
+    Write-Host "Report saved: $reportPath" -ForegroundColor Gray
+} catch {
+    Write-Warning "Failed to write report to ${reportPath}: $($_.Exception.Message)"
+}
 
 exit $(if ($script:Findings.Count -gt 0) { 1 } else { 0 })
