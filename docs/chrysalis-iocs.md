@@ -61,9 +61,19 @@
 | IP | 61.4.102.97 |
 | IP | 59.110.7.32 |
 | IP | 124.222.137.114 |
+| IP | 45.32.144.255 |
+| IP | 45.76.155.202 |
+| IP | 45.77.31.210 |
 | Domain | api.skycloudcenter.com |
 | Domain | api.wiresguard.com |
+| Domain | cdncheck.it.com |
+| Domain | self-dns.it.com |
+| Domain | safe-dns.it.com |
 | C2 URL (Chrysalis) | https://api.skycloudcenter.com/a/chat/s/70521ddf-a2ef-4adf-9cf0-6d8e24aaa821 |
+
+Additional SHA-1 file hashes (from the Kaspersky Notepad++ supply-chain report) are tracked in `iocs.json` under `fileHashesSha1` and matched alongside the SHA-256 set above.
+
+**Sources:** [Rapid7 – Chrysalis backdoor](https://www.rapid7.com/blog/post/tr-chrysalis-backdoor-dive-into-lotus-blossoms-toolkit/) (SHA-256, paths, mutex); [Kaspersky – Notepad++ supply-chain attack](https://securelist.com/notepad-supply-chain-attack/118708/) (SHA-1, additional C2 IPs/domains).
 
 ---
 
