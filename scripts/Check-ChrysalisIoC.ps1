@@ -56,18 +56,29 @@ function Add-Finding {
     })
 }
 
-function Get-FileSha256 {
+# Reads a file once and checks it against both the SHA-256 and SHA-1 IoC sets.
+# Returns a descriptive match string (e.g. "SHA1: <hash>") or $null. Reporting
+# vendors publish different algorithms -- Rapid7 used SHA-256, Kaspersky SHA-1 --
+# so a single-algorithm check would silently miss half the known-bad files.
+function Get-FileHashIocMatch {
     param([string]$Path)
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return $null }
     try {
         $bytes = [System.IO.File]::ReadAllBytes($Path)
-        $sha   = [System.Security.Cryptography.SHA256]::Create()
-        $hash  = $sha.ComputeHash($bytes)
-        $sha.Dispose()
-        return ($hash | ForEach-Object { $_.ToString('x2') }) -join ''
     } catch {
         return $null
     }
+    if ($hashSet.Count -gt 0) {
+        $sha = [System.Security.Cryptography.SHA256]::Create()
+        try { $h = (($sha.ComputeHash($bytes)) | ForEach-Object { $_.ToString('x2') }) -join '' } finally { $sha.Dispose() }
+        if ($hashSet.Contains($h)) { return "SHA256: $h" }
+    }
+    if ($hashSetSha1.Count -gt 0) {
+        $sha = [System.Security.Cryptography.SHA1]::Create()
+        try { $h = (($sha.ComputeHash($bytes)) | ForEach-Object { $_.ToString('x2') }) -join '' } finally { $sha.Dispose() }
+        if ($hashSetSha1.Contains($h)) { return "SHA1: $h" }
+    }
+    return $null
 }
 
 # Load IoCs
@@ -77,6 +88,8 @@ if (-not (Test-Path -LiteralPath $IocFile)) {
 $iocs = Get-Content -Raw -Path $IocFile | ConvertFrom-Json
 $hashSet = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
 foreach ($h in $iocs.fileHashes) { [void] $hashSet.Add($h.Trim()) }
+$hashSetSha1 = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+foreach ($h in $iocs.fileHashesSha1) { [void] $hashSetSha1.Add($h.Trim()) }
 
 # ---- 1) Paths ----
 Write-Host "[*] Checking known paths..." -ForegroundColor Cyan
@@ -102,10 +115,10 @@ $pathsToHash = @($bluetoothDir, (Expand-PathEnv '%ProgramData%\USOShared'))
 foreach ($dir in $pathsToHash) {
     if (-not (Test-Path -LiteralPath $dir)) { continue }
     Get-ChildItem -LiteralPath $dir -File -Recurse -ErrorAction SilentlyContinue | ForEach-Object {
-        $hash = Get-FileSha256 -Path $_.FullName
-        if ($hash -and $hashSet.Contains($hash)) {
-            Add-Finding -Category 'FileHash' -Detail "Known malicious hash: $($_.FullName) (SHA256: $hash)" -Severity 'Critical'
-            Write-Host "  [MATCH] $($_.FullName) => $hash" -ForegroundColor Red
+        $match = Get-FileHashIocMatch -Path $_.FullName
+        if ($match) {
+            Add-Finding -Category 'FileHash' -Detail "Known malicious hash: $($_.FullName) ($match)" -Severity 'Critical'
+            Write-Host "  [MATCH] $($_.FullName) => $match" -ForegroundColor Red
         }
     }
 }
@@ -115,10 +128,10 @@ foreach ($scanRoot in $ScanPaths) {
     if (-not (Test-Path -LiteralPath $scanRoot)) { continue }
     Write-Host "[*] Scanning hashes under: $scanRoot" -ForegroundColor Cyan
     Get-ChildItem -LiteralPath $scanRoot -File -Recurse -ErrorAction SilentlyContinue | ForEach-Object {
-        $hash = Get-FileSha256 -Path $_.FullName
-        if ($hash -and $hashSet.Contains($hash)) {
-            Add-Finding -Category 'FileHash' -Detail "Known malicious hash: $($_.FullName) (SHA256: $hash)" -Severity 'Critical'
-            Write-Host "  [MATCH] $($_.FullName) => $hash" -ForegroundColor Red
+        $match = Get-FileHashIocMatch -Path $_.FullName
+        if ($match) {
+            Add-Finding -Category 'FileHash' -Detail "Known malicious hash: $($_.FullName) ($match)" -Severity 'Critical'
+            Write-Host "  [MATCH] $($_.FullName) => $match" -ForegroundColor Red
         }
     }
 }
