@@ -20,6 +20,11 @@
 .EXAMPLE
   .\Check-ChrysalisIoC.ps1 -ScanPaths "C:\Users","C:\ProgramData"
   Also hash and compare files under given paths (slower).
+
+.EXAMPLE
+  .\Check-ChrysalisIoC.ps1 -Admin
+  Check every user profile's AppData\Bluetooth folder, not just the current
+  user's. Requires permission to read other users' profiles (run elevated).
 #>
 
 [CmdletBinding()]
@@ -27,7 +32,8 @@ param(
     [string[]] $ScanPaths = @(),
     [string]   $IocFile    = '',
     [switch]   $NoRegistry,
-    [switch]   $NoMutex
+    [switch]   $NoMutex,
+    [switch]   $Admin
 )
 
 $ErrorActionPreference = 'Stop'
@@ -64,6 +70,24 @@ function Add-Finding {
         Severity = $Severity
         Time     = (Get-Date).ToString('o')
     })
+}
+
+# Returns the AppData\Bluetooth directories to inspect. By default this is just
+# the current user's. With -Admin, every user profile under the profiles root
+# (parent of $env:USERPROFILE, e.g. C:\Users) is enumerated -- reading other
+# users' AppData requires elevation, so unreadable profiles are skipped quietly.
+function Get-BluetoothDirsToCheck {
+    if (-not $Admin) {
+        return ,(Expand-PathEnv '%AppData%\Bluetooth')
+    }
+    $dirs = [System.Collections.Generic.List[string]]::new()
+    $usersRoot = Split-Path -Parent $env:USERPROFILE
+    if (-not (Test-Path -LiteralPath $usersRoot)) { return $dirs }
+    Get-ChildItem -LiteralPath $usersRoot -Directory -Force -ErrorAction SilentlyContinue | ForEach-Object {
+        # AppData\Roaming is the per-user expansion of %AppData%
+        $dirs.Add((Join-Path $_.FullName 'AppData\Roaming\Bluetooth'))
+    }
+    return $dirs
 }
 
 # Reads a file once and checks it against both the SHA-256 and SHA-1 IoC sets.
@@ -110,18 +134,21 @@ foreach ($rel in $iocs.paths) {
         Write-Host "  [FOUND] $full" -ForegroundColor Red
     }
 }
-# Hidden Bluetooth folder (Chrysalis-specific)
-$bluetoothDir = Expand-PathEnv '%AppData%\Bluetooth'
-if (Test-Path -LiteralPath $bluetoothDir) {
-    $item = Get-Item -LiteralPath $bluetoothDir -Force -ErrorAction SilentlyContinue
+# Hidden Bluetooth folder (Chrysalis-specific). With -Admin, check every user's.
+$bluetoothDirs = @(Get-BluetoothDirsToCheck)
+if ($Admin) { Write-Host "[*] -Admin: checking $($bluetoothDirs.Count) user profile(s)' Bluetooth folders." -ForegroundColor Cyan }
+foreach ($btDir in $bluetoothDirs) {
+    if (-not (Test-Path -LiteralPath $btDir)) { continue }
+    $item = Get-Item -LiteralPath $btDir -Force -ErrorAction SilentlyContinue
     if ($item -and ($item.Attributes -band [System.IO.FileAttributes]::Hidden)) {
-        Add-Finding -Category 'Path' -Detail "Hidden directory (Chrysalis install): $bluetoothDir" -Severity 'High'
-        Write-Host "  [FOUND] Hidden dir: $bluetoothDir" -ForegroundColor Red
+        Add-Finding -Category 'Path' -Detail "Hidden directory (Chrysalis install): $btDir" -Severity 'High'
+        Write-Host "  [FOUND] Hidden dir: $btDir" -ForegroundColor Red
     }
 }
 
 # ---- 2) File hashes in known paths (Bluetooth + USOShared only; TEMP/TMP skipped to avoid slow scan) ----
-$pathsToHash = @($bluetoothDir, (Expand-PathEnv '%ProgramData%\USOShared'))
+# %ProgramData% is machine-wide, so it is hashed once regardless of -Admin.
+$pathsToHash = @($bluetoothDirs + (Expand-PathEnv '%ProgramData%\USOShared'))
 foreach ($dir in $pathsToHash) {
     if (-not (Test-Path -LiteralPath $dir)) { continue }
     Get-ChildItem -LiteralPath $dir -File -Recurse -ErrorAction SilentlyContinue | ForEach-Object {
