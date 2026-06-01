@@ -1,13 +1,17 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-  Checks the local Windows system for Chrysalis / Lotus Blossom IoCs.
+  Checks the local system for Chrysalis / Lotus Blossom IoCs.
 
 .DESCRIPTION
   Uses IoCs from Rapid7's Chrysalis backdoor write-up:
   https://www.rapid7.com/blog/post/tr-chrysalis-backdoor-dive-into-lotus-blossoms-toolkit/
 
   Checks: file hashes, suspicious paths, mutex, Run keys, and optional drive scan.
+
+  Runs on Windows PowerShell 5.1 and on PowerShell 7+ (Windows, Linux, macOS).
+  The registry and service checks are Windows-only and are skipped automatically
+  on other platforms; file-hash, path, and mutex checks run everywhere.
 
 .EXAMPLE
   .\Check-ChrysalisIoC.ps1
@@ -29,6 +33,12 @@ param(
 $ErrorActionPreference = 'Stop'
 $script:Findings = [System.Collections.ArrayList]::new()
 $script:Checked  = [System.Collections.ArrayList]::new()
+
+# Are we on Windows? $IsWindows is an automatic variable in PowerShell 6+, but
+# does not exist in Windows PowerShell 5.1 (where the host is always Windows).
+# Treat "variable absent" as Windows so the registry/service/path checks still
+# run on 5.1. The hash and mutex checks are cross-platform and run everywhere.
+$script:OnWindows = if ($null -eq (Get-Variable -Name IsWindows -ErrorAction SilentlyContinue)) { $true } else { [bool]$IsWindows }
 
 # Resolve IoC file path when not specified
 if (-not $IocFile) {
@@ -152,7 +162,8 @@ if (-not $NoMutex -and $iocs.mutexes) {
 }
 
 # ---- 4) Registry Run keys (Chrysalis: BluetoothService with -i/-k in AppData\Bluetooth) ----
-if (-not $NoRegistry -and $iocs.registryRunPaths) {
+# Registry checks are Windows-only (no registry provider on Linux/macOS).
+if (-not $NoRegistry -and $iocs.registryRunPaths -and $script:OnWindows) {
     Write-Host "[*] Checking Run keys..." -ForegroundColor Cyan
     foreach ($regPath in $iocs.registryRunPaths) {
         $base = if ($regPath -match '^HKCU') { 'HKCU:' } else { 'HKLM:' }
@@ -173,9 +184,13 @@ if (-not $NoRegistry -and $iocs.registryRunPaths) {
         } catch { }
     }
 }
+elseif (-not $NoRegistry -and -not $script:OnWindows) {
+    Write-Host "[*] Skipping registry and service checks (not running on Windows)." -ForegroundColor DarkGray
+}
 
 # ---- 5) Services: Chrysalis uses "BluetoothService" or path in AppData\Bluetooth ----
-if (-not $NoRegistry) {
+# Win32_Service is a Windows-only CIM class.
+if (-not $NoRegistry -and $script:OnWindows) {
     Write-Host "[*] Checking services..." -ForegroundColor Cyan
     Get-CimInstance Win32_Service -ErrorAction SilentlyContinue | Where-Object {
         $_.Name -eq 'BluetoothService' -or ($_.PathName -match 'AppData[\\/].*Bluetooth[\\/]BluetoothService\.exe')
